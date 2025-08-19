@@ -1,0 +1,5 @@
+[local]
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+
+[ec2_instances]
+wordpress-server ansible_host=16.24.100.187 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/42-cloud-key.pem

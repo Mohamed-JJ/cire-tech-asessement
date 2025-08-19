@@ -1,0 +1,35 @@
+---
+- name: Deploy WordPress Infrastructure
+  hosts: ec2_instances
+  become: yes
+  vars:
+    # WordPress Configuration
+    # wordpress_db_name: wordpress
+    # wordpress_db_user: wordpress
+    # wordpress_db_password: "{{ vault_wordpress_db_password | default('changeme123') }}"
+    # wordpress_db_root_password: "{{ vault_db_root_password | default('rootpassword123') }}"
+    
+    # Domain and SSL
+    # domain_name: "{{ vault_domain_name | default('localhost') }}"
+    
+    # Docker network
+    # docker_network_name: wordpress_network
+    
+    # Container names
+    # mariadb_container_name: wordpress_mariadb
+    # wordpress_container_name: wordpress_app
+    # nginx_container_name: wordpress_nginx
+
+  roles:
+    - ../roles/common
+    - ../roles/docker
+    - ../roles/wordpress-stack
+
+  # post_tasks:
+  #   - name: Display deployment information
+  #     debug:
+  #       msg:
+  #         - "WordPress deployment completed successfully!"
+  #         - "Access your site at: http://{{ ansible_host }}"
+  #         - "Database: {{ wordpress_db_name }}"
+  #         - "Make sure to change default passwords in production!"
