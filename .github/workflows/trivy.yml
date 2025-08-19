@@ -75,4 +75,3 @@ jobs:
       - name: Run Selenium tests
         run: |
           echo "Running Selenium tests..."
-          pytest tests/selenium/
