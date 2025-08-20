@@ -26,7 +26,7 @@ jobs:
         run: docker pull wazuh/wazuh-indexer:4.12.0
 
       - name: Scan wazuh-indexer with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.30.0
         with:
           image-ref: wazuh/wazuh-indexer:4.12.0
           format: 'sarif'
@@ -56,7 +56,7 @@ jobs:
         run: docker pull wazuh/wazuh-manager:4.12.0
 
       - name: Scan wazuh-manager with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.30.0
         with:
           image-ref: wazuh/wazuh-manager:4.12.0
           format: 'sarif'
@@ -86,7 +86,7 @@ jobs:
         run: docker pull wazuh/wazuh-dashboard:4.12.0
 
       - name: Scan wazuh-dashboard with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.30.0
         with:
           image-ref: wazuh/wazuh-dashboard:4.12.0
           format: 'sarif'
