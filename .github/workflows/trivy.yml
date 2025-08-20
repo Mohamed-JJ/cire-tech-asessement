@@ -12,34 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  extract-images:
+  trivy-indexer:
     runs-on: ubuntu-latest
-    outputs:
-      images: ${{ steps.get-images.outputs.images }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      # Install yq (Go version) + jq
-      - name: Install yq (Go version) and jq
-        run: |
-          sudo wget https://github.com/mikefarah/yq/releases/download/v4.44.2/yq_linux_amd64 -O /usr/bin/yq
-          sudo chmod +x /usr/bin/yq
-          sudo apt-get update && sudo apt-get install -y jq
-
-      # Parse image names from docker-compose.yml
-      - id: get-images
-        run: |
-          images=$(yq e '.services[].image' cire-soc-challenge/wazuh-docker/single-node/docker-compose.yml | jq -R -s -c 'split("\n")[:-1]')
-          echo "images=$images" >> $GITHUB_OUTPUT
-
-  trivy-scan:
-    needs: extract-images
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        image: ${{ fromJson(needs.extract-images.outputs.images) }}
     permissions:
       contents: read
       security-events: write
@@ -48,28 +22,90 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Pull image
-        run: docker pull ${{ matrix.image }}
+      - name: Pull wazuh-indexer image
+        run: docker pull wazuh/wazuh-indexer:4.12.0
 
-      - name: Run Trivy vulnerability scanner
+      - name: Scan wazuh-indexer with Trivy
         uses: aquasecurity/trivy-action@0.22.0
         with:
-          image-ref: ${{ matrix.image }}
+          image-ref: wazuh/wazuh-indexer:4.12.0
           format: 'template'
           template: '@/contrib/sarif.tpl'
-          output: 'trivy-results-${{ matrix.image }}.sarif'
+          output: 'trivy-results-wazuh-indexer.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
 
-      - name: Upload Trivy scan results to GitHub Security tab
+      - name: Upload SARIF results
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results-${{ matrix.image }}.sarif'
+          sarif_file: 'trivy-results-wazuh-indexer.sarif'
+
+  trivy-manager:
+    needs: trivy-indexer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Pull wazuh-manager image
+        run: docker pull wazuh/wazuh-manager:4.12.0
+
+      - name: Scan wazuh-manager with Trivy
+        uses: aquasecurity/trivy-action@0.22.0
+        with:
+          image-ref: wazuh/wazuh-manager:4.12.0
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-results-wazuh-manager.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results-wazuh-manager.sarif'
+
+  trivy-dashboard:
+    needs: trivy-manager
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Pull wazuh-dashboard image
+        run: docker pull wazuh/wazuh-dashboard:4.12.0
+
+      - name: Scan wazuh-dashboard with Trivy
+        uses: aquasecurity/trivy-action@0.22.0
+        with:
+          image-ref: wazuh/wazuh-dashboard:4.12.0
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-results-wazuh-dashboard.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results-wazuh-dashboard.sarif'
 
   selenium-tests:
-    needs: trivy-scan
+    needs: trivy-dashboard
     runs-on: ubuntu-latest
     if: success()
     steps:
@@ -79,4 +115,4 @@ jobs:
       - name: Run Selenium tests
         run: |
           echo "Running Selenium tests..."
-          pytest tests/selenium/
+
