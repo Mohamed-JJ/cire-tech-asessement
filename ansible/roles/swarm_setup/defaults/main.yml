@@ -1,0 +1,15 @@
+# Default variables for swarm_setup role
+---
+primary_manager: "host1"
+swarm_manager_groups: []
+
+# Docker Swarm Configuration
+docker_swarm_advertise_addr: "{{ ansible_default_ipv4.address }}"
+docker_swarm_listen_addr: "{{ ansible_default_ipv4.address }}:2377"
+
+# Network Configuration
+overlay_networks:
+  - name: "wazuh_network"
+    driver: "overlay"
+    attachable: true
+    encrypted: false

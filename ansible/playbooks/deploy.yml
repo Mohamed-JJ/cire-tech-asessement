@@ -1,0 +1,78 @@
+---
+# Main playbook for Docker Swarm deployment
+- name: Deploy Wazuh Stack to Docker Swarm
+  hosts: ec2_instances
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../vault.yml
+  
+  pre_tasks:
+    - name: Verify hosts are reachable
+      ping:
+      tags: [always]
+
+    - name: Gather system information
+      setup:
+        filter: ansible_*
+      tags: [always]
+
+  tasks:
+    - name: Include Docker installation role
+      include_role:
+        name: docker_setup
+      tags: [docker, setup]
+
+    - name: Include Docker Swarm setup role
+      include_role:
+        name: swarm_setup
+      tags: [swarm, setup]
+
+    - name: Include SSL certificates setup role
+      include_role:
+        name: ssl_setup
+      tags: [ssl, setup]
+
+    - name: Include stack deployment role
+      include_role:
+        name: stack_deploy
+      tags: [stack, deploy]
+
+  post_tasks:
+    - name: Display deployment information
+      debug:
+        msg: |
+          Wazuh Stack Deployment Complete!
+          
+          Services Status:
+          - Load Balancer (Nginx): http://{{ ansible_default_ipv4.address }}:80
+          - Manager: https://{{ ansible_default_ipv4.address }}:55000
+          - Dashboard: https://{{ ansible_default_ipv4.address }}:443 (or via Nginx: http://{{ ansible_default_ipv4.address }}:80/dashboard/)
+          - Indexer: https://{{ ansible_default_ipv4.address }}:9200 (or via Nginx: http://{{ ansible_default_ipv4.address }}:80/indexer/)
+          
+          Health Check Endpoints:
+          - Main Health Check: http://{{ ansible_default_ipv4.address }}:80/health
+          - Simple Status: http://{{ ansible_default_ipv4.address }}:80/status
+          - Manager Health: http://{{ ansible_default_ipv4.address }}:80/health/manager
+          - Dashboard Health: http://{{ ansible_default_ipv4.address }}:80/health/dashboard
+          - Indexer Health: http://{{ ansible_default_ipv4.address }}:80/health/indexer
+          
+          Login Credentials:
+          - Dashboard: {{ DASHBOARD_USERNAME }} / {{ DASHBOARD_PASSWORD }}
+          - API: {{ API_USERNAME }} / {{ API_PASSWORD }}
+          
+          Stack Name: {{ stack_name }}
+          Deployment Time: {{ ansible_date_time.iso8601 }}
+      run_once: true
+      tags: [info, deploy]
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes

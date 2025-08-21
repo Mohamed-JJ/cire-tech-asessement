@@ -1,0 +1,15 @@
+# Default variables for ssl_setup role
+---
+# SSL Certificates path
+ssl_certs_path: "/opt/ssl-certs"
+config_path: "/opt/configs"
+
+# Stack name for templates and configs
+stack_name: "wazuh"
+
+# Let's Encrypt configuration
+# domain_name: "your-domain.com"  # Set this in group_vars or inventory
+# letsencrypt_email: "admin@your-domain.com"  # Optional, defaults to admin@domain_name
+
+# Certificate type preference (letsencrypt or selfsigned)
+certificate_type: "letsencrypt"  # Set to "selfsigned" to skip Let's Encrypt

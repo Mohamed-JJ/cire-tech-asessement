@@ -1,0 +1,125 @@
+---
+# Rollback playbook for Wazuh Stack
+- name: Rollback Wazuh Stack Deployment
+  hosts: ec2_instances
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../vault.yml
+
+  tasks:
+    - name: Check if stack exists
+      docker_stack_info:
+        name: "{{ stack_name }}"
+      register: stack_status
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+
+    - name: Remove Docker stack
+      docker_stack:
+        name: "{{ stack_name }}"
+        state: absent
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      when: stack_status.results | default([]) | length > 0
+
+    - name: Wait for stack removal
+      pause:
+        seconds: 30
+      when: stack_status.results | default([]) | length > 0
+
+    - name: Remove Docker configs
+      docker_config:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - 'root-ca-pem'
+        - 'root-ca-manager-pem'
+        - 'wazuh-manager-pem'
+        - 'wazuh-manager-key-pem'
+        - 'wazuh-indexer-pem'
+        - 'wazuh-indexer-key-pem'
+        - 'wazuh-dashboard-pem'
+        - 'wazuh-dashboard-key-pem'
+        - 'admin-pem'
+        - 'admin-key-pem'
+        - 'wazuh-indexer-yml'
+        - 'internal-users-yml'
+        - 'opensearch-dashboards-yml'
+        - 'wazuh-dashboard-yml'
+        - 'wazuh-manager-conf'
+        - 'nginx-conf'
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+
+    - name: Remove Docker secrets
+      docker_secret:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - "indexer_password"
+        - "api_password"
+        - "dashboard_password"
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+      no_log: true
+
+    - name: Remove overlay networks
+      docker_network:
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ overlay_networks }}"
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+
+    - name: Remove volumes (optional - use with caution)
+      docker_volume:
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ docker_volumes }}"
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+      when: force_volume_removal | default(false)
+
+    - name: Clean up deployment directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ compose_file_path }}"
+        - "{{ ssl_certs_path }}"
+        - "{{ config_path }}"
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+
+    - name: Verify rollback completion
+      docker_stack_info:
+        name: "{{ stack_name }}"
+      register: final_check
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+
+    - name: Display rollback results
+      debug:
+        msg: |
+          Rollback completed successfully!
+          Stack {{ stack_name }} has been removed.
+          Configs and secrets have been cleaned up.
+          {% if force_volume_removal | default(false) %}
+          Volumes have been removed (data loss occurred).
+          {% else %}
+          Volumes were preserved (set force_volume_removal=true to remove them).
+          {% endif %}
+      when: final_check.results | default([]) | length == 0
+
+    - name: Rollback verification failed
+      fail:
+        msg: "Rollback may have failed - stack still exists"
+      when: final_check.results | default([]) | length > 0

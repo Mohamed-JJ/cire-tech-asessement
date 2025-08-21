@@ -1,0 +1,386 @@
+---
+- name: Update system packages (Ubuntu)
+  apt:
+    update_cache: yes
+    upgrade: dist
+    cache_valid_time: 3600
+  when: ansible_os_family == "Debian"
+
+- name: Update system packages (RHEL/CentOS)
+  yum:
+    name: "*"
+    state: latest
+    update_cache: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Install required packages (Ubuntu)
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - software-properties-common
+      - python3-setuptools
+      - python3-dev
+      - build-essential
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install pip for Python3 (Ubuntu 24.04+)
+  block:
+    - name: Try to install python3-pip from universe repository
+      shell: |
+        add-apt-repository universe -y
+        apt update
+        apt install -y python3-pip python3-venv
+      register: pip_install_universe
+      ignore_errors: yes
+    
+    - name: Install pip manually using get-pip.py if universe fails
+      block:
+        - name: Install pip using get-pip.py with --break-system-packages
+          command: python3 /tmp/get-pip.py --break-system-packages
+          register: manual_pip_result
+        
+        - name: Verify pip installation
+          command: python3 -m pip --version
+          register: pip_verify_result
+      when: pip_install_universe.failed | default(false)
+  when: 
+    - ansible_os_family == "Debian"
+    - ansible_distribution_major_version|int >= 24
+
+- name: Install pip for Python3 (Ubuntu older versions)
+  apt:
+    name: python3-pip
+    state: present
+    update_cache: yes
+  when: 
+    - ansible_os_family == "Debian"
+    - ansible_distribution_major_version|int < 24
+  ignore_errors: yes
+
+- name: Download get-pip.py
+  get_url:
+    url: https://bootstrap.pypa.io/get-pip.py
+    dest: /tmp/get-pip.py
+    mode: '0755'
+  when: ansible_os_family == "Debian"
+
+- name: Clean up get-pip.py
+  file:
+    path: /tmp/get-pip.py
+    state: absent
+  when: ansible_os_family == "Debian"
+
+- name: Install required packages (RHEL/CentOS)
+  block:
+    - name: Check if curl-minimal is installed
+      command: rpm -q curl-minimal
+      register: curl_minimal_check
+      failed_when: false
+      changed_when: false
+
+    - name: Remove curl-minimal if present (Amazon Linux 2023 compatibility)
+      yum:
+        name: curl-minimal
+        state: absent
+        allow_downgrade: yes
+      when: 
+        - curl_minimal_check.rc == 0
+        - ansible_distribution == "Amazon"
+      ignore_errors: yes
+
+    - name: Install required packages (excluding curl initially)
+      yum:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+          - wget
+          - unzip
+          - python3-pip
+        state: present
+
+    - name: Install curl after removing curl-minimal
+      yum:
+        name: curl
+        state: present
+        allow_downgrade: yes
+      ignore_errors: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Verify pip installation
+  shell: python3 -c "import pip; print(pip.__version__)" 
+  register: pip_verify
+  failed_when: false
+  changed_when: false
+  when: ansible_os_family == "Debian"
+
+- name: Install Docker Python library from Ubuntu packages (Ubuntu/Debian)
+  apt:
+    name:
+      - python3-docker
+      - python3-dockerpty
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install Docker Python library (RHEL/CentOS) - Fallback to pip
+  block:
+    - name: Check for conflicting Python packages installed via RPM
+      shell: rpm -qa | grep -E "python.*requests|python.*urllib3"
+      register: rpm_python_packages
+      failed_when: false
+      changed_when: false
+
+    - name: Try installing Docker Python library normally
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+        extra_args: "--user"
+      become_user: "{{ ansible_user }}"
+      register: pip_install_result
+      ignore_errors: yes
+
+    - name: Install Docker Python library with force reinstall if conflicts exist
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+        extra_args: "--user --force-reinstall --no-deps"
+      become_user: "{{ ansible_user }}"
+      when: pip_install_result.failed | default(false)
+      register: pip_force_install
+      ignore_errors: yes
+
+    - name: Install dependencies separately to avoid conflicts
+      pip:
+        name:
+          - "requests>=2.26.0"
+          - "urllib3>=1.26.0"
+        state: present
+        extra_args: "--user --ignore-installed"
+      become_user: "{{ ansible_user }}"
+      when: pip_force_install.failed | default(false)
+      ignore_errors: yes
+
+    - name: Final attempt with system pip and ignore conflicts
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+        extra_args: "--break-system-packages --force-reinstall"
+      when: 
+        - pip_install_result.failed | default(false)
+        - pip_force_install.failed | default(false)
+      ignore_errors: yes
+
+    - name: Alternative Docker Python library installation via system packages
+      block:
+        - name: Install python3-docker via system package manager
+          yum:
+            name: python3-docker
+            state: present
+          when: pip_install_result.failed | default(false)
+          ignore_errors: yes
+          
+        - name: Install docker-compose via system package manager  
+          shell: |
+            curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            chmod +x /usr/local/bin/docker-compose
+          when: pip_install_result.failed | default(false)
+          ignore_errors: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Install Docker Python library with conflict resolution (RHEL/CentOS)
+  block:
+    - name: Check for conflicting Python packages installed via RPM
+      shell: rpm -qa | grep -E "python.*requests|python.*urllib3"
+      register: rpm_python_packages
+      failed_when: false
+      changed_when: false
+
+    - name: Try installing Docker Python library normally
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+        extra_args: "--user"
+      become_user: "{{ ansible_user }}"
+      register: pip_install_result
+      ignore_errors: yes
+
+    - name: Install Docker Python library with force reinstall if conflicts exist
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+        extra_args: "--user --force-reinstall --no-deps"
+      become_user: "{{ ansible_user }}"
+      when: pip_install_result.failed | default(false)
+      register: pip_force_install
+      ignore_errors: yes
+
+    - name: Install dependencies separately to avoid conflicts
+      pip:
+        name:
+          - "requests>=2.26.0"
+          - "urllib3>=1.26.0"
+        state: present
+        extra_args: "--user --ignore-installed"
+      become_user: "{{ ansible_user }}"
+      when: pip_force_install.failed | default(false)
+      ignore_errors: yes
+
+    - name: Final attempt with system pip and ignore conflicts
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+        extra_args: "--break-system-packages --force-reinstall"
+      when: 
+        - pip_install_result.failed | default(false)
+        - pip_force_install.failed | default(false)
+      ignore_errors: yes
+
+    - name: Alternative Docker Python library installation via system packages
+      block:
+        - name: Install python3-docker via system package manager
+          yum:
+            name: python3-docker
+            state: present
+          when: pip_install_result.failed | default(false)
+          ignore_errors: yes
+          
+        - name: Install docker-compose via system package manager  
+          shell: |
+            curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            chmod +x /usr/local/bin/docker-compose
+          when: pip_install_result.failed | default(false)
+          ignore_errors: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Install Docker from Ubuntu repository (Ubuntu/Debian)
+  apt:
+    name:
+      - docker.io
+      - docker-compose
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+  register: docker_install_result
+
+- name: Install additional Docker tools (Ubuntu/Debian)
+  apt:
+    name:
+      - docker-buildx
+      - containerd
+    state: present
+  when: ansible_os_family == "Debian"
+  ignore_errors: yes
+
+- name: Install Docker (RHEL/CentOS/Amazon Linux)
+  block:
+    - name: Add Docker repository for RHEL/CentOS
+      yum_repository:
+        name: docker-ce
+        description: Docker CE Stable - $basearch
+        baseurl: "https://download.docker.com/linux/centos/{{ ansible_distribution_major_version|default('8') }}/$basearch/stable"
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: yes
+      when: 
+        - ansible_os_family == "RedHat"
+        - ansible_distribution != "Amazon"
+
+    - name: Install Docker from Amazon Linux extras (if available)
+      shell: amazon-linux-extras install docker -y
+      when: ansible_distribution == "Amazon"
+      ignore_errors: yes
+      register: amazon_docker_install
+
+    - name: Install Docker CE via yum repository
+      yum:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+      when: 
+        - ansible_os_family == "RedHat"
+        - (amazon_docker_install.failed | default(true))
+      ignore_errors: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Start and enable Docker service
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Add users to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+
+- name: Reset SSH connection to allow user group changes to take effect
+  meta: reset_connection
+
+- name: Configure Docker daemon
+  copy:
+    content: |
+      {
+        "log-driver": "{{ logging_driver | default('json-file') }}",
+        "log-opts": {
+          "max-size": "{{ logging_options['max-size'] | default('10m') }}",
+          "max-file": "{{ logging_options['max-file'] | default('3') }}"
+        },
+        "storage-driver": "overlay2",
+        "metrics-addr": "127.0.0.1:9323",
+        "experimental": false
+      }
+    dest: /etc/docker/daemon.json
+    mode: '0644'
+  notify: restart docker
+
+- name: Ensure Docker is running
+  systemd:
+    name: docker
+    state: started
+
+- name: Verify Docker installation
+  command: docker --version
+  register: docker_version
+  changed_when: false
+
+- name: Display Docker version
+  debug:
+    msg: "Docker installed: {{ docker_version.stdout }}"
+
+- name: Test Docker functionality
+  docker_container:
+    name: hello-world-test
+    image: hello-world
+    state: started
+    auto_remove: yes
+  register: docker_test
+  ignore_errors: yes
+
+- name: Verify Docker is working
+  fail:
+    msg: "Docker installation failed - unable to run containers"
+  when: docker_test.failed | default(false)

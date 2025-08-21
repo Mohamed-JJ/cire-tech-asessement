@@ -1,0 +1,254 @@
+---
+- name: Install snapd (required for certbot)
+  apt:
+    name: snapd
+    state: present
+    update_cache: yes
+  delegate_to: "host1"
+  run_once: true
+
+- name: Install certbot via snap
+  snap:
+    name: certbot
+    classic: yes
+    state: present
+  delegate_to: "host1"
+  run_once: true
+
+- name: Create SSL certificates directory
+  file:
+    path: "{{ ssl_certs_path }}"
+    state: directory
+    mode: '0755'
+  delegate_to: "host1"
+  run_once: true
+
+- name: Create configs directory
+  file:
+    path: "{{ config_path }}"
+    state: directory
+    mode: '0755'
+  delegate_to: "host1"
+  run_once: true
+
+- name: Stop any processes using port 80 for Let's Encrypt challenge
+  shell: |
+    # Stop any nginx containers
+    docker stop nginx || true
+    # Kill any processes on port 80
+    fuser -k 80/tcp || true
+  delegate_to: "host1"
+  run_once: true
+  ignore_errors: yes
+  when: domain_name is defined and domain_name != ""
+
+- name: Generate Let's Encrypt SSL certificates
+  shell: |
+    /snap/bin/certbot certonly --standalone \
+      --non-interactive \
+      --agree-tos \
+      --email {{ letsencrypt_email | default('admin@' + domain_name) }} \
+      -d {{ domain_name }} \
+      --cert-name wazuh
+  delegate_to: "host1"
+  run_once: true
+  register: certbot_result
+  when: domain_name is defined and domain_name != ""
+
+- name: Copy Let's Encrypt certificates to SSL directory
+  copy:
+    remote_src: yes
+    src: "/etc/letsencrypt/live/wazuh/{{ item.src }}"
+    dest: "{{ ssl_certs_path }}/{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - { src: 'fullchain.pem', dest: 'wazuh.manager.pem' }
+    - { src: 'privkey.pem', dest: 'wazuh.manager-key.pem' }
+    - { src: 'fullchain.pem', dest: 'wazuh.indexer.pem' }
+    - { src: 'privkey.pem', dest: 'wazuh.indexer-key.pem' }
+    - { src: 'fullchain.pem', dest: 'wazuh.dashboard.pem' }
+    - { src: 'privkey.pem', dest: 'wazuh.dashboard-key.pem' }
+    - { src: 'fullchain.pem', dest: 'admin.pem' }
+    - { src: 'privkey.pem', dest: 'admin-key.pem' }
+    - { src: 'chain.pem', dest: 'root-ca.pem' }
+    - { src: 'chain.pem', dest: 'root-ca-manager.pem' }
+  delegate_to: "host1"
+  run_once: true
+  when: certbot_result is succeeded and domain_name is defined
+
+- name: Copy existing SSL certificates from source as fallback
+  copy:
+    src: "{{ item }}"
+    dest: "{{ ssl_certs_path }}/"
+    mode: '0644'
+  with_fileglob:
+    - "/Users/mjarboua/Desktop/cire-soc-challenge/wazuh-docker/single-node/config/wazuh_indexer_ssl_certs/*"
+  delegate_to: "host1"
+  run_once: true
+  when: certbot_result is failed or domain_name is not defined or domain_name == ""
+
+- name: Copy configuration files from source
+  synchronize:
+    src: "/Users/mjarboua/Desktop/cire-soc-challenge/wazuh-docker/single-node/config/"
+    dest: "{{ config_path }}/"
+    delete: false
+    recursive: true
+    rsync_opts:
+      - "--exclude=wazuh_indexer_ssl_certs"
+  run_once: true
+
+- name: Set proper permissions on SSL certificates
+  file:
+    path: "{{ ssl_certs_path }}"
+    state: directory
+    recurse: yes
+    mode: '0644'
+  delegate_to: "host1"
+  run_once: true
+
+- name: Create certificate renewal script
+  copy:
+    content: |
+      #!/bin/bash
+      # Renew Let's Encrypt certificates and restart services
+      /snap/bin/certbot renew --quiet
+      if [ $? -eq 0 ]; then
+          # Copy renewed certificates
+          cp /etc/letsencrypt/live/wazuh/fullchain.pem {{ ssl_certs_path }}/wazuh.manager.pem
+          cp /etc/letsencrypt/live/wazuh/privkey.pem {{ ssl_certs_path }}/wazuh.manager-key.pem
+          cp /etc/letsencrypt/live/wazuh/fullchain.pem {{ ssl_certs_path }}/wazuh.indexer.pem
+          cp /etc/letsencrypt/live/wazuh/privkey.pem {{ ssl_certs_path }}/wazuh.indexer-key.pem
+          cp /etc/letsencrypt/live/wazuh/fullchain.pem {{ ssl_certs_path }}/wazuh.dashboard.pem
+          cp /etc/letsencrypt/live/wazuh/privkey.pem {{ ssl_certs_path }}/wazuh.dashboard-key.pem
+          
+          # Reload Docker stack
+          docker stack deploy -c /opt/docker-stacks/wazuh/docker-compose.swarm.yml wazuh
+          echo "Certificates renewed and services reloaded successfully"
+      fi
+    dest: /usr/local/bin/renew-wazuh-certs.sh
+    mode: '0755'
+  delegate_to: "host1"
+  run_once: true
+  when: certbot_result is succeeded and domain_name is defined
+
+- name: Setup cron job for certificate renewal
+  cron:
+    name: "Renew Wazuh SSL certificates"
+    minute: "0"
+    hour: "2"
+    day: "1"
+    job: "/usr/local/bin/renew-wazuh-certs.sh"
+  delegate_to: "host1"
+  run_once: true
+  when: certbot_result is succeeded and domain_name is defined
+
+- name: Read SSL certificate files
+  slurp:
+    src: "{{ ssl_certs_path }}/{{ item.file }}"
+  register: ssl_cert_contents
+  loop:
+    - { name: 'root-ca-pem', file: 'root-ca.pem' }
+    - { name: 'root-ca-manager-pem', file: 'root-ca-manager.pem' }
+    - { name: 'wazuh-manager-pem', file: 'wazuh.manager.pem' }
+    - { name: 'wazuh-manager-key-pem', file: 'wazuh.manager-key.pem' }
+    - { name: 'wazuh-indexer-pem', file: 'wazuh.indexer.pem' }
+    - { name: 'wazuh-indexer-key-pem', file: 'wazuh.indexer-key.pem' }
+    - { name: 'wazuh-dashboard-pem', file: 'wazuh.dashboard.pem' }
+    - { name: 'wazuh-dashboard-key-pem', file: 'wazuh.dashboard-key.pem' }
+    - { name: 'admin-pem', file: 'admin.pem' }
+    - { name: 'admin-key-pem', file: 'admin-key.pem' }
+  delegate_to: "host1"
+  run_once: true
+
+- name: Create Docker configs for SSL certificates
+  docker_config:
+    name: "{{ item.item.name }}"
+    data: "{{ item.content | b64decode }}"
+    state: present
+  loop: "{{ ssl_cert_contents.results }}"
+  delegate_to: "host1"
+  run_once: true
+
+- name: Read configuration files
+  slurp:
+    src: "{{ config_path }}/{{ item.file }}"
+  register: config_file_contents
+  loop:
+    - { name: 'wazuh-indexer-yml', file: 'wazuh_indexer/wazuh.indexer.yml' }
+    - { name: 'internal-users-yml', file: 'wazuh_indexer/internal_users.yml' }
+    - { name: 'opensearch-dashboards-yml', file: 'wazuh_dashboard/opensearch_dashboards.yml' }
+    - { name: 'wazuh-dashboard-yml', file: 'wazuh_dashboard/wazuh.yml' }
+    - { name: 'wazuh-manager-conf', file: 'wazuh_cluster/wazuh_manager.conf' }
+  delegate_to: "host1"
+  run_once: true
+
+- name: Create Docker configs for configuration files
+  docker_config:
+    name: "{{ item.item.name }}"
+    data: "{{ item.content | b64decode }}"
+    state: present
+  loop: "{{ config_file_contents.results }}"
+  delegate_to: "host1"
+  run_once: true
+
+- name: Generate Nginx configuration from template
+  template:
+    src: nginx-simple.conf.j2
+    dest: "{{ config_path }}/nginx.conf"
+    mode: '0644'
+  delegate_to: "host1"
+  run_once: true
+
+- name: Read Nginx configuration file
+  slurp:
+    src: "{{ config_path }}/nginx.conf"
+  register: nginx_config_content
+  delegate_to: "host1"
+  run_once: true
+
+- name: Create Docker config for Nginx configuration
+  docker_config:
+    name: "nginx-conf"
+    data: "{{ nginx_config_content.content | b64decode }}"
+    state: present
+  delegate_to: "host1"
+  run_once: true
+
+- name: Create Docker secrets for sensitive data
+  docker_secret:
+    name: "{{ item.name }}"
+    data: "{{ item.data }}"
+    state: present
+  loop:
+    - name: "indexer_password"
+      data: "{{ INDEXER_PASSWORD }}"
+    - name: "api_password"
+      data: "{{ API_PASSWORD }}"
+    - name: "dashboard_password"
+      data: "{{ DASHBOARD_PASSWORD }}"
+  delegate_to: "host1"
+  run_once: true
+  no_log: true
+
+- name: Verify configs creation
+  command: docker config ls --format "table {% raw %}{{.Name}}\t{{.CreatedAt}}{% endraw %}"
+  register: docker_configs_list
+  delegate_to: "host1"
+  run_once: true
+
+- name: Verify secrets creation
+  command: docker secret ls --format "table {% raw %}{{.Name}}\t{{.CreatedAt}}{% endraw %}"
+  register: docker_secrets_list
+  delegate_to: "host1"
+  run_once: true
+
+- name: Display created configs and secrets
+  debug:
+    msg: |
+      Docker Configs:
+      {{ docker_configs_list.stdout }}
+      
+      Docker Secrets:
+      {{ docker_secrets_list.stdout }}
+  delegate_to: "host1"
+  run_once: true

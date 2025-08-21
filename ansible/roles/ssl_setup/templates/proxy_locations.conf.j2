@@ -1,0 +1,75 @@
+# Shared proxy locations for HTTPS server
+location /dashboard/ {
+    limit_req zone=api burst=10 nodelay;
+    
+    proxy_pass http://wazuh_dashboard/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Port 443;
+    
+    proxy_connect_timeout {{ nginx_config.proxy_connect_timeout | default('75s') }};
+    proxy_send_timeout {{ nginx_config.proxy_read_timeout | default('300s') }};
+    proxy_read_timeout {{ nginx_config.proxy_read_timeout | default('300s') }};
+    
+    proxy_buffering off;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+}
+
+location /api/ {
+    limit_req zone=api burst=20 nodelay;
+    
+    proxy_pass http://wazuh_manager/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Port 443;
+    
+    proxy_connect_timeout {{ nginx_config.proxy_connect_timeout | default('75s') }};
+    proxy_send_timeout {{ nginx_config.proxy_read_timeout | default('300s') }};
+    proxy_read_timeout {{ nginx_config.proxy_read_timeout | default('300s') }};
+    
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+}
+
+location /indexer/ {
+    limit_req zone=api burst=10 nodelay;
+    
+    rewrite ^/indexer/(.*) /$1 break;
+    proxy_pass http://wazuh_indexer;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Port 443;
+    
+    proxy_connect_timeout {{ nginx_config.proxy_connect_timeout | default('75s') }};
+    proxy_send_timeout {{ nginx_config.proxy_read_timeout | default('300s') }};
+    proxy_read_timeout {{ nginx_config.proxy_read_timeout | default('300s') }};
+    
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+}
+
+location /status {
+    limit_req zone=health burst=50 nodelay;
+    access_log off;
+    
+    add_header Content-Type text/plain;
+    return 200 "OK - SSL";
+}
+
+location /metrics {
+    limit_req zone=api burst=5 nodelay;
+    
+    content_by_lua_block {
+        ngx.header.content_type = "text/plain"
+        ngx.say("# HELP nginx_ssl_connections_active Active SSL connections")
+        ngx.say("# TYPE nginx_ssl_connections_active gauge")
+        ngx.say("nginx_ssl_connections_active ", ngx.var.connections_active)
+    }
+}

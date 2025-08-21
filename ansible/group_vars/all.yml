@@ -1,0 +1,100 @@
+# Global variables for Docker Swarm deployment
+---
+# Docker Swarm Configuration
+docker_swarm_advertise_addr: "{{ ansible_default_ipv4.address }}"
+docker_swarm_listen_addr: "{{ ansible_default_ipv4.address }}:2377"
+
+# Primary manager for Docker Swarm
+primary_manager: "host1"
+
+# Stack Configuration
+stack_name: "wazuh"
+compose_file_path: "/opt/docker-stacks/{{ stack_name }}"
+compose_file_name: "docker-compose.swarm.yml"
+
+# Network Configuration
+overlay_networks:
+  - name: "wazuh_network"
+    driver: "overlay"
+    attachable: true
+    encrypted: false
+
+# Volume Configuration
+docker_volumes:
+  - wazuh_api_configuration
+  - wazuh_etc
+  - wazuh_logs
+  - wazuh_queue
+  - wazuh_var_multigroups
+  - wazuh_integrations
+  - wazuh_active_response
+  - wazuh_agentless
+  - wazuh_wodles
+  - filebeat_etc
+  - filebeat_var
+  - wazuh-indexer-data
+  - wazuh-dashboard-config
+  - wazuh-dashboard-custom
+  - nginx-conf
+  - nginx-logs
+
+# Service Configuration
+wazuh_services:
+  manager:
+    image: "wazuh/wazuh-manager:4.12.0"
+    replicas: 1
+    placement_constraints:
+      - "node.role == manager"
+  indexer:
+    image: "wazuh/wazuh-indexer:4.12.0"
+    replicas: 1
+    placement_constraints:
+      - "node.role == manager"
+  dashboard:
+    image: "wazuh/wazuh-dashboard:4.12.0"
+    replicas: 1
+    placement_constraints:
+      - "node.role == manager"
+  nginx:
+    image: "nginx:1.25-alpine"
+    replicas: 1
+    placement_constraints:
+      - "node.role == manager"
+
+# Nginx Configuration
+nginx_config:
+  proxy_read_timeout: "300s"
+  proxy_connect_timeout: "75s"
+  client_max_body_size: "10m"
+  upstream_keepalive: "32"
+
+# Rollback Configuration
+rollback_enabled: true
+rollback_on_failure: true
+update_parallelism: 1
+update_delay: 10s
+update_failure_action: "rollback"
+update_monitor: 60s
+rollback_parallelism: 1
+rollback_delay: 0s
+rollback_failure_action: "pause"
+rollback_monitor: 60s
+rollback_max_failure_ratio: 0
+
+# Health Check Configuration
+health_check_interval: 30s
+health_check_timeout: 10s
+health_check_retries: 3
+health_check_start_period: 40s
+
+# SSL Certificates path (will be created as Docker configs)
+ssl_certs_path: "/opt/ssl-certs"
+config_path: "/opt/configs"
+
+# Let's Encrypt configuration
+# Uncomment and set these for Let's Encrypt SSL certificates
+# domain_name: "your-wazuh-domain.com"  # Your domain name pointing to host1
+# letsencrypt_email: "admin@your-wazuh-domain.com"  # Email for Let's Encrypt notifications
+
+# For now, we'll use the existing self-signed certificates
+domain_name: ""  # Set to empty to use fallback certificates

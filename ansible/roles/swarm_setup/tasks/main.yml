@@ -1,0 +1,97 @@
+---
+- name: Check if Docker Swarm is already initialized
+  docker_swarm_info:
+  register: swarm_info
+  ignore_errors: true
+
+- name: Initialize Docker Swarm on first host (primary manager)
+  docker_swarm:
+    state: present
+    advertise_addr: "{{ docker_swarm_advertise_addr }}"
+    listen_addr: "{{ docker_swarm_listen_addr }}"
+  register: swarm_init_result
+  when: 
+    - inventory_hostname == "host1"
+    - swarm_info.can_talk_to_docker is defined
+    - not (swarm_info.docker_swarm_active | default(false))
+
+- name: Get swarm join tokens
+  docker_swarm_info:
+  register: swarm_tokens
+  delegate_to: "host1"
+  run_once: true
+
+- name: Join nodes to swarm as managers (if specified)
+  docker_swarm:
+    state: join
+    advertise_addr: "{{ docker_swarm_advertise_addr }}"
+    join_token: "{{ swarm_tokens.swarm_facts.JoinTokens.Manager }}"
+    remote_addrs: "{{ hostvars['host1']['ansible_default_ipv4']['address'] }}:2377"
+  when: 
+    - inventory_hostname != "host1"
+    - inventory_hostname in swarm_manager_groups | default([])
+    - not (swarm_info.docker_swarm_active | default(false))
+
+- name: Join nodes to swarm as workers
+  docker_swarm:
+    state: join
+    advertise_addr: "{{ docker_swarm_advertise_addr }}"
+    join_token: "{{ swarm_tokens.swarm_facts.JoinTokens.Worker }}"
+    remote_addrs: "{{ hostvars['host1']['ansible_default_ipv4']['address'] }}:2377"
+  when: 
+    - inventory_hostname != "host1"
+    - inventory_hostname not in swarm_manager_groups | default([])
+    - not (swarm_info.docker_swarm_active | default(false))
+
+- name: Wait for swarm to be ready
+  pause:
+    seconds: 10
+  when: swarm_init_result.changed | default(false)
+
+- name: Verify swarm status
+  docker_swarm_info:
+  register: final_swarm_info
+
+- name: Display swarm nodes
+  docker_node_info:
+  register: swarm_nodes
+  delegate_to: "host1"
+  run_once: true
+
+- name: Show swarm cluster information
+  debug:
+    msg: |
+      Docker Swarm Cluster Status:
+      - Swarm ID: {{ final_swarm_info.swarm_facts.ID | default('N/A') }}
+      - Manager: host1
+      - Total Nodes: {{ swarm_nodes.nodes | length }}
+      - Active: {{ final_swarm_info.docker_swarm_active }}
+  run_once: true
+  delegate_to: "host1"
+
+- name: Create overlay networks
+  docker_network:
+    name: "{{ item.name }}"
+    driver: "{{ item.driver }}"
+    scope: swarm
+    attachable: "{{ item.attachable | default(true) }}"
+    state: present
+  loop: "{{ overlay_networks }}"
+  delegate_to: "host1"
+  run_once: true
+
+- name: Label nodes for service placement
+  docker_node:
+    hostname: "{{ item.Description.Hostname }}"
+    labels:
+      node.type: "{{ 'manager' if item.Spec.Role == 'manager' else 'worker' }}"
+      node.environment: "{{ env | default('production') }}"
+  loop: "{{ swarm_nodes.nodes }}"
+  delegate_to: "host1"
+
+- name: Set node availability
+  docker_node:
+    hostname: "{{ item.Description.Hostname }}"
+    availability: active
+  loop: "{{ swarm_nodes.nodes }}"
+  delegate_to: "host1"

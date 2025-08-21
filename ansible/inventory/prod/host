@@ -1,0 +1,7 @@
+[local]
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+
+[ec2_instances]
+host1 ansible_host=56.228.42.55 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/siem-challenge.pem ansible_python_interpreter=/usr/bin/python3
+host2 ansible_host=13.51.166.232 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/siem-challenge.pem ansible_python_interpreter=/usr/bin/python3
+host3 ansible_host=13.61.22.27 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/siem-challenge.pem ansible_python_interpreter=/usr/bin/python3

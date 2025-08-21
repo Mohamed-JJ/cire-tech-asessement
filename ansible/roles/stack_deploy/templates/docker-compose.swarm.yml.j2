@@ -1,0 +1,379 @@
+# Docker Compose file for Docker Swarm deployment
+version: '3.8'
+
+networks:
+  wazuh_network:
+    external: true
+    driver: overlay
+
+configs:
+  root_ca_pem:
+    external: true
+    name: root-ca-pem
+  root_ca_manager_pem:
+    external: true
+    name: root-ca-manager-pem
+  wazuh_manager_pem:
+    external: true
+    name: wazuh-manager-pem
+  wazuh_manager_key_pem:
+    external: true
+    name: wazuh-manager-key-pem
+  wazuh_indexer_pem:
+    external: true
+    name: wazuh-indexer-pem
+  wazuh_indexer_key_pem:
+    external: true
+    name: wazuh-indexer-key-pem
+  wazuh_dashboard_pem:
+    external: true
+    name: wazuh-dashboard-pem
+  wazuh_dashboard_key_pem:
+    external: true
+    name: wazuh-dashboard-key-pem
+  admin_pem:
+    external: true
+    name: admin-pem
+  admin_key_pem:
+    external: true
+    name: admin-key-pem
+  wazuh_indexer_yml:
+    external: true
+    name: wazuh-indexer-yml
+  internal_users_yml:
+    external: true
+    name: internal-users-yml
+  opensearch_dashboards_yml:
+    external: true
+    name: opensearch-dashboards-yml
+  wazuh_dashboard_yml:
+    external: true
+    name: wazuh-dashboard-yml
+  wazuh_manager_conf:
+    external: true
+    name: wazuh-manager-conf
+  nginx_conf:
+    external: true
+    name: nginx-conf
+
+secrets:
+  indexer_password:
+    external: true
+  api_password:
+    external: true
+  dashboard_password:
+    external: true
+
+services:
+  wazuh-manager:
+    image: {{ wazuh_services.manager.image }}
+    hostname: wazuh.manager
+    networks:
+      - wazuh_network
+    ports:
+{% for port in wazuh_ports.manager %}
+      - "{{ port }}"
+{% endfor %}
+    environment:
+      - INDEXER_URL={{ INDEXER_URL }}
+      - INDEXER_USERNAME={{ INDEXER_USERNAME }}
+      - INDEXER_PASSWORD_FILE=/run/secrets/indexer_password
+      - FILEBEAT_SSL_VERIFICATION_MODE={{ FILEBEAT_SSL_VERIFICATION_MODE }}
+      - SSL_CERTIFICATE_AUTHORITIES={{ SSL_CERTIFICATE_AUTHORITIES }}
+      - SSL_CERTIFICATE={{ SSL_CERTIFICATE }}
+      - SSL_KEY={{ SSL_KEY }}
+      - API_USERNAME={{ API_USERNAME }}
+      - API_PASSWORD_FILE=/run/secrets/api_password
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+    configs:
+      - source: root_ca_manager_pem
+        target: /etc/ssl/root-ca.pem
+        mode: 0644
+      - source: wazuh_manager_pem
+        target: /etc/ssl/filebeat.pem
+        mode: 0644
+      - source: wazuh_manager_key_pem
+        target: /etc/ssl/filebeat.key
+        mode: 0644
+      - source: wazuh_manager_conf
+        target: /wazuh-config-mount/etc/ossec.conf
+        mode: 0644
+    secrets:
+      - indexer_password
+      - api_password
+    deploy:
+      replicas: {{ wazuh_services.manager.replicas }}
+      placement:
+        constraints: {{ wazuh_services.manager.placement_constraints }}
+      resources:
+        limits:
+          memory: {{ resource_limits.manager.memory }}
+          cpus: "{{ resource_limits.manager.cpus }}"
+        reservations:
+          memory: {{ resource_reservations.manager.memory }}
+          cpus: "{{ resource_reservations.manager.cpus }}"
+      update_config:
+        parallelism: {{ update_parallelism }}
+        delay: {{ update_delay }}
+        failure_action: {{ update_failure_action }}
+        monitor: {{ update_monitor }}
+        max_failure_ratio: {{ rollback_max_failure_ratio }}
+      rollback_config:
+        parallelism: {{ rollback_parallelism }}
+        delay: {{ rollback_delay }}
+        failure_action: {{ rollback_failure_action }}
+        monitor: {{ rollback_monitor }}
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:55000 || exit 1"]
+      interval: {{ health_check_interval }}
+      timeout: {{ health_check_timeout }}
+      retries: {{ health_check_retries }}
+      start_period: {{ health_check_start_period }}
+    logging:
+      driver: {{ logging_driver }}
+      options:
+        max-size: {{ logging_options['max-size'] }}
+        max-file: "{{ logging_options['max-file'] }}"
+
+  wazuh-indexer:
+    image: {{ wazuh_services.indexer.image }}
+    hostname: wazuh.indexer
+    networks:
+      - wazuh_network
+    ports:
+{% for port in wazuh_ports.indexer %}
+      - "{{ port }}"
+{% endfor %}
+    environment:
+      - "OPENSEARCH_JAVA_OPTS={{ OPENSEARCH_JAVA_OPTS }}"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+    configs:
+      - source: root_ca_pem
+        target: /usr/share/wazuh-indexer/certs/root-ca.pem
+        mode: 0644
+      - source: wazuh_indexer_key_pem
+        target: /usr/share/wazuh-indexer/certs/wazuh.indexer.key
+        mode: 0644
+      - source: wazuh_indexer_pem
+        target: /usr/share/wazuh-indexer/certs/wazuh.indexer.pem
+        mode: 0644
+      - source: admin_pem
+        target: /usr/share/wazuh-indexer/certs/admin.pem
+        mode: 0644
+      - source: admin_key_pem
+        target: /usr/share/wazuh-indexer/certs/admin-key.pem
+        mode: 0644
+      - source: wazuh_indexer_yml
+        target: /usr/share/wazuh-indexer/opensearch.yml
+        mode: 0644
+      - source: internal_users_yml
+        target: /usr/share/wazuh-indexer/opensearch-security/internal_users.yml
+        mode: 0644
+    deploy:
+      replicas: {{ wazuh_services.indexer.replicas }}
+      placement:
+        constraints: {{ wazuh_services.indexer.placement_constraints }}
+      resources:
+        limits:
+          memory: {{ resource_limits.indexer.memory }}
+          cpus: "{{ resource_limits.indexer.cpus }}"
+        reservations:
+          memory: {{ resource_reservations.indexer.memory }}
+          cpus: "{{ resource_reservations.indexer.cpus }}"
+      update_config:
+        parallelism: {{ update_parallelism }}
+        delay: {{ update_delay }}
+        failure_action: {{ update_failure_action }}
+        monitor: {{ update_monitor }}
+        max_failure_ratio: {{ rollback_max_failure_ratio }}
+      rollback_config:
+        parallelism: {{ rollback_parallelism }}
+        delay: {{ rollback_delay }}
+        failure_action: {{ rollback_failure_action }}
+        monitor: {{ rollback_monitor }}
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -ku admin:admin https://localhost:9200/_cluster/health || exit 1"]
+      interval: {{ health_check_interval }}
+      timeout: {{ health_check_timeout }}
+      retries: {{ health_check_retries }}
+      start_period: {{ health_check_start_period }}
+    logging:
+      driver: {{ logging_driver }}
+      options:
+        max-size: {{ logging_options['max-size'] }}
+        max-file: "{{ logging_options['max-file'] }}"
+
+  wazuh-dashboard:
+    image: {{ wazuh_services.dashboard.image }}
+    hostname: wazuh.dashboard
+    networks:
+      - wazuh_network
+    ports:
+{% for port in wazuh_ports.dashboard %}
+      - "{{ port }}"
+{% endfor %}
+    environment:
+      - INDEXER_USERNAME={{ INDEXER_USERNAME }}
+      - INDEXER_PASSWORD_FILE=/run/secrets/indexer_password
+      - WAZUH_API_URL={{ WAZUH_API_URL }}
+      - DASHBOARD_USERNAME={{ DASHBOARD_USERNAME }}
+      - DASHBOARD_PASSWORD_FILE=/run/secrets/dashboard_password
+      - API_USERNAME={{ API_USERNAME }}
+      - API_PASSWORD_FILE=/run/secrets/api_password
+    volumes:
+      - wazuh-dashboard-config:/usr/share/wazuh-dashboard/data/wazuh/config
+      - wazuh-dashboard-custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    configs:
+      - source: wazuh_dashboard_pem
+        target: /usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem
+        mode: 0644
+      - source: wazuh_dashboard_key_pem
+        target: /usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem
+        mode: 0644
+      - source: root_ca_pem
+        target: /usr/share/wazuh-dashboard/certs/root-ca.pem
+        mode: 0644
+      - source: opensearch_dashboards_yml
+        target: /usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+        mode: 0644
+      - source: wazuh_dashboard_yml
+        target: /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+        mode: 0644
+    secrets:
+      - indexer_password
+      - dashboard_password
+      - api_password
+    depends_on:
+      - wazuh-indexer
+      - wazuh-manager
+    deploy:
+      replicas: {{ wazuh_services.dashboard.replicas }}
+      placement:
+        constraints: {{ wazuh_services.dashboard.placement_constraints }}
+      resources:
+        limits:
+          memory: {{ resource_limits.dashboard.memory }}
+          cpus: "{{ resource_limits.dashboard.cpus }}"
+        reservations:
+          memory: {{ resource_reservations.dashboard.memory }}
+          cpus: "{{ resource_reservations.dashboard.cpus }}"
+      update_config:
+        parallelism: {{ update_parallelism }}
+        delay: {{ update_delay }}
+        failure_action: {{ update_failure_action }}
+        monitor: {{ update_monitor }}
+        max_failure_ratio: {{ rollback_max_failure_ratio }}
+      rollback_config:
+        parallelism: {{ rollback_parallelism }}
+        delay: {{ rollback_delay }}
+        failure_action: {{ rollback_failure_action }}
+        monitor: {{ rollback_monitor }}
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/app/wazuh || exit 1"]
+      interval: {{ health_check_interval }}
+      timeout: {{ health_check_timeout }}
+      retries: {{ health_check_retries }}
+      start_period: {{ health_check_start_period }}
+    logging:
+      driver: {{ logging_driver }}
+      options:
+        max-size: {{ logging_options['max-size'] }}
+        max-file: "{{ logging_options['max-file'] }}"
+
+  nginx:
+    image: {{ wazuh_services.nginx.image }}
+    hostname: nginx.wazuh
+    networks:
+      - wazuh_network
+    ports:
+{% for port in wazuh_ports.nginx %}
+      - "{{ port }}"
+{% endfor %}
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/nginx.conf
+        mode: 0644
+    volumes:
+      - nginx-logs:/var/log/nginx
+    depends_on:
+      - wazuh-manager
+      - wazuh-indexer
+      - wazuh-dashboard
+    deploy:
+      replicas: {{ wazuh_services.nginx.replicas }}
+      placement:
+        constraints: {{ wazuh_services.nginx.placement_constraints }}
+      resources:
+        limits:
+          memory: {{ resource_limits.nginx.memory }}
+          cpus: "{{ resource_limits.nginx.cpus }}"
+        reservations:
+          memory: {{ resource_reservations.nginx.memory }}
+          cpus: "{{ resource_reservations.nginx.cpus }}"
+      update_config:
+        parallelism: {{ update_parallelism }}
+        delay: {{ update_delay }}
+        failure_action: {{ update_failure_action }}
+        monitor: {{ update_monitor }}
+        max_failure_ratio: {{ rollback_max_failure_ratio }}
+      rollback_config:
+        parallelism: {{ rollback_parallelism }}
+        delay: {{ rollback_delay }}
+        failure_action: {{ rollback_failure_action }}
+        monitor: {{ rollback_monitor }}
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/health || exit 1"]
+      interval: {{ health_check_interval }}
+      timeout: {{ health_check_timeout }}
+      retries: {{ health_check_retries }}
+      start_period: {{ health_check_start_period }}
+    logging:
+      driver: {{ logging_driver }}
+      options:
+        max-size: {{ logging_options['max-size'] }}
+        max-file: "{{ logging_options['max-file'] }}"
+
+volumes:
+{% for volume in docker_volumes %}
+  {{ volume }}:
+    driver: local
+{% endfor %}

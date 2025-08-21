@@ -1,0 +1,117 @@
+---
+- name: Get stack services information
+  docker_stack_info:
+    name: "{{ stack_name }}"
+  register: stack_services
+
+- name: Get detailed service information
+  docker_service_info:
+    name: "{{ item }}"
+  register: service_details
+  loop:
+    - "{{ stack_name }}_wazuh-manager"
+    - "{{ stack_name }}_wazuh-indexer"
+    - "{{ stack_name }}_wazuh-dashboard"
+    - "{{ stack_name }}_nginx"
+
+- name: Check service health
+  uri:
+    url: "{{ item.url }}"
+    method: GET
+    validate_certs: false
+    timeout: 10
+    status_code: [200, 401, 403]
+  register: health_checks
+  loop:
+    - { name: "nginx-health", url: "http://{{ ansible_default_ipv4.address }}:80/health" }
+    - { name: "nginx-status", url: "http://{{ ansible_default_ipv4.address }}:80/status" }
+    - { name: "wazuh-manager", url: "http://{{ ansible_default_ipv4.address }}:55000" }
+    - { name: "wazuh-indexer", url: "https://{{ ansible_default_ipv4.address }}:9200" }
+    - { name: "wazuh-dashboard", url: "https://{{ ansible_default_ipv4.address }}:443" }
+  ignore_errors: true
+
+- name: Display service status
+  debug:
+    msg: |
+      Service: {{ item.item }}
+      Replicas: {{ item.service.Spec.Mode.Replicated.Replicas | default('N/A') }}
+      Running Tasks: {{ item.service.ServiceStatus.RunningTasks | default(0) }}
+      Desired Tasks: {{ item.service.ServiceStatus.DesiredTasks | default(0) }}
+      Update State: {{ item.service.UpdateStatus.State | default('N/A') }}
+  loop: "{{ service_details.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Display health check results
+  debug:
+    msg: |
+      Health Check: {{ item.item.name }}
+      URL: {{ item.item.url }}
+      Status: {{ 'OK' if item.status in [200, 401, 403] else 'FAILED' }}
+      Response Code: {{ item.status | default('Connection Error') }}
+  loop: "{{ health_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Check Docker Swarm node status
+  docker_node_info:
+  register: node_status
+
+- name: Display node information
+  debug:
+    msg: |
+      Node ID: {{ item.ID }}
+      Hostname: {{ item.Description.Hostname }}
+      Status: {{ item.Status.State }}
+      Availability: {{ item.Spec.Availability }}
+      Role: {{ item.Spec.Role }}
+      Leader: {{ item.ManagerStatus.Leader | default(false) }}
+  loop: "{{ node_status.nodes }}"
+  loop_control:
+    label: "{{ item.Description.Hostname }}"
+
+- name: Get stack logs (last 50 lines)
+  shell: |
+    docker service logs --tail 50 {{ stack_name }}_{{ item }} 2>/dev/null || echo "No logs available for {{ item }}"
+  register: service_logs
+  loop:
+    - "wazuh-manager"
+    - "wazuh-indexer" 
+    - "wazuh-dashboard"
+    - "nginx"
+  changed_when: false
+  ignore_errors: true
+
+- name: Display recent service logs
+  debug:
+    msg: |
+      Recent logs for {{ item.item }}:
+      {{ item.stdout }}
+  loop: "{{ service_logs.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stdout is defined and item.stdout != ""
+
+- name: Verify deployment success
+  assert:
+    that:
+      - stack_services.results | length > 0
+      - service_details.results | selectattr('service.ServiceStatus.RunningTasks', 'equalto', 0) | list | length == 0
+    fail_msg: "Stack deployment verification failed. Some services are not running properly."
+    success_msg: "Stack deployment verification successful. All services are running."
+
+- name: Create deployment summary
+  set_fact:
+    deployment_summary:
+      stack_name: "{{ stack_name }}"
+      deployment_time: "{{ ansible_date_time.iso8601 }}"
+      services_count: "{{ service_details.results | length }}"
+      running_services: "{{ service_details.results | selectattr('service.ServiceStatus.RunningTasks', 'greaterthan', 0) | list | length }}"
+      failed_services: "{{ service_details.results | selectattr('service.ServiceStatus.RunningTasks', 'equalto', 0) | list | length }}"
+      swarm_nodes: "{{ node_status.nodes | length }}"
+      manager_nodes: "{{ node_status.nodes | selectattr('Spec.Role', 'equalto', 'manager') | list | length }}"
+      worker_nodes: "{{ node_status.nodes | selectattr('Spec.Role', 'equalto', 'worker') | list | length }}"
+
+- name: Display deployment summary
+  debug:
+    var: deployment_summary

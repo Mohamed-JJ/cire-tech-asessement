@@ -1,0 +1,123 @@
+---
+- name: Create stack deployment directory
+  file:
+    path: "{{ compose_      shell: |
+        service_name="{{ stack_name }}_{{ item }}"
+        replicas=$(docker service inspect $service_name --format '{% raw %}{{.Spec.Mode.Replicated.Replicas}}{% endraw %}' 2>/dev/null || echo "0")
+        running=$(docker service ls --filter name=$service_name --format '{% raw %}{{.Replicas}}{% endraw %}' | grep -o '^[0-9]*' || echo "0")
+        echo "Service: $service_name, Expected: $replicas, Running: $running"
+        test "$replicas" = "$running"ath }}"
+    state: directory
+    mode: '0755'
+  delegate_to: "{{ primary_manager }}"
+  run_once: true
+
+- name: Generate Docker Swarm compose file from template
+  template:
+    src: docker-compose.swarm.yml.j2
+    dest: "{{ compose_file_path }}/{{ compose_file_name }}"
+    mode: '0644'
+  delegate_to: "{{ primary_manager }}"
+  run_once: true
+
+- name: Check if stack is already deployed
+  shell: docker stack ls --format "table {% raw %}{{.Name}}{% endraw %}" --filter name={{ stack_name }}
+  register: existing_stack
+  delegate_to: "{{ primary_manager }}"
+  run_once: true
+  ignore_errors: true
+  changed_when: false
+
+- name: Deploy or update Docker stack
+  docker_stack:
+    name: "{{ stack_name }}"
+    compose:
+      - "{{ compose_file_path }}/{{ compose_file_name }}"
+    state: present
+    with_registry_auth: yes
+  register: stack_deploy_result
+  delegate_to: "{{ primary_manager }}"
+  run_once: true
+
+- name: Wait for services to be running
+  pause:
+    seconds: 30
+  when: stack_deploy_result.changed
+
+- name: Get stack services status
+  shell: docker stack services {{ stack_name }} --format "table {% raw %}{{.Name}}\t{{.Replicas}}\t{{.Image}}{% endraw %}"
+  register: stack_info
+  delegate_to: "{{ primary_manager }}"
+  run_once: true
+  changed_when: false
+  ignore_errors: true
+
+- name: Wait for all services to be ready
+  shell: |
+    service_name="{{ stack_name }}_{{ item }}"
+    replicas=$(docker service inspect $service_name --format '{% raw %}{{.Spec.Mode.Replicated.Replicas}}{% endraw %}' 2>/dev/null || echo "0")
+    running=$(docker service ls --filter name=$service_name --format '{% raw %}{{.Replicas}}{% endraw %}' | grep -o '^[0-9]*' || echo "0")
+    echo "Service: $service_name, Expected: $replicas, Running: $running"
+    test "$replicas" = "$running"
+  register: service_status
+  until: service_status.rc == 0
+  retries: "{{ service_check_retries }}"
+  delay: "{{ service_check_delay }}"
+  loop: "{{ stack_services }}"
+  delegate_to: "{{ primary_manager }}"
+  run_once: true
+  ignore_errors: true
+  changed_when: false
+
+- name: Verify stack deployment
+  shell: docker stack services {{ stack_name }} --format "table {% raw %}{{.Name}}\t{{.Replicas}}\t{{.Image}}{% endraw %}"
+  register: final_stack_info
+  delegate_to: "{{ primary_manager }}"
+  run_once: true
+  changed_when: false
+
+- name: Handle deployment failure
+  block:
+    - name: Check for failed services
+      shell: |
+        service_name="{{ stack_name }}_{{ item }}"
+        replicas=$(docker service inspect $service_name --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null || echo "0")
+        running=$(docker service ls --filter name=$service_name --format '{{.Replicas}}' | grep -o '^[0-9]*' || echo "0")
+        echo "Service: $service_name, Expected: $replicas, Running: $running"
+        if [ "$replicas" != "$running" ]; then
+          echo "FAILED"
+          exit 1
+        fi
+        echo "OK"
+      register: service_check
+      loop: "{{ stack_services }}"
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+      changed_when: false
+
+    - name: Rollback stack if rollback is enabled and deployment failed
+      docker_stack:
+        name: "{{ stack_name }}"
+        state: absent
+      when: 
+        - rollback_enabled | default(true)
+        - service_check.results | selectattr('rc', 'ne', 0) | list | length > 0
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+
+    - name: Fail deployment if services are not running
+      fail:
+        msg: "Stack deployment failed - some services are not running. Check 'docker service ls' and 'docker service logs <service-name>' for details."
+      when: service_check.results | selectattr('rc', 'ne', 0) | list | length > 0
+      
+  when: final_stack_info.rc != 0
+
+- name: Display stack deployment results
+  debug:
+    msg: |
+      Stack {{ stack_name }} deployment {{ 'completed successfully' if final_stack_info.rc == 0 else 'failed' }}
+      Services output: {{ final_stack_info.stdout }}
+      Deployment time: {{ ansible_date_time.iso8601 }}
+  delegate_to: "{{ primary_manager }}"
+  run_once: true

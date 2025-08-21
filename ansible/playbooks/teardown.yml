@@ -1,0 +1,57 @@
+---
+# Enhanced teardown playbook for complete cleanup
+- name: Teardown Wazuh Docker Swarm Deployment
+  hosts: ec2_instances
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../vault.yml
+
+  tasks:
+    - name: Include rollback tasks
+      include: rollback.yml
+
+    - name: Leave Docker Swarm (workers first)
+      docker_swarm:
+        state: absent
+        force: true
+      when: inventory_hostname != primary_manager
+      ignore_errors: true
+
+    - name: Leave Docker Swarm (manager last)
+      docker_swarm:
+        state: absent
+        force: true
+      when: inventory_hostname == primary_manager
+      delegate_to: "{{ primary_manager }}"
+      run_once: true
+      ignore_errors: true
+
+    - name: Prune Docker system
+      docker_prune:
+        containers: true
+        images: true
+        networks: true
+        volumes: true
+        builder_cache: true
+      ignore_errors: true
+
+    - name: Remove Docker daemon configuration
+      file:
+        path: /etc/docker/daemon.json
+        state: absent
+      notify: restart docker
+
+    - name: Display teardown completion
+      debug:
+        msg: |
+          Teardown completed successfully!
+          - Docker Swarm has been disbanded
+          - All containers, images, networks, and volumes have been cleaned up
+          - System has been reset to clean state
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted

@@ -1,0 +1,365 @@
+version: '3.8'
+
+networks:
+  wazuh_network:
+    external: true
+    driver: overlay
+
+configs:
+  root_ca_pem:
+    external: true
+    name: root-ca-pem
+  wazuh_manager_pem:
+    external: true
+    name: wazuh-manager-pem
+  wazuh_manager_key_pem:
+    external: true
+    name: wazuh-manager-key-pem
+  wazuh_indexer_pem:
+    external: true
+    name: wazuh-indexer-pem
+  wazuh_indexer_key_pem:
+    external: true
+    name: wazuh-indexer-key-pem
+  wazuh_dashboard_pem:
+    external: true
+    name: wazuh-dashboard-pem
+  wazuh_dashboard_key_pem:
+    external: true
+    name: wazuh-dashboard-key-pem
+  admin_pem:
+    external: true
+    name: admin-pem
+  admin_key_pem:
+    external: true
+    name: admin-key-pem
+  wazuh_indexer_yml:
+    external: true
+    name: wazuh-indexer-yml
+  internal_users_yml:
+    external: true
+    name: internal-users-yml
+  opensearch_dashboards_yml:
+    external: true
+    name: opensearch-dashboards-yml
+  wazuh_dashboard_yml:
+    external: true
+    name: wazuh-dashboard-yml
+  wazuh_manager_conf:
+    external: true
+    name: wazuh-manager-conf
+  nginx_conf:
+    external: true
+    name: nginx-conf
+
+secrets:
+  indexer_password:
+    external: true
+    name: indexer_password
+  api_password:
+    external: true
+    name: api_password
+  dashboard_password:
+    external: true
+    name: dashboard_password
+
+volumes:
+  wazuh_api_configuration:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_queue:
+  wazuh_var_multigroups:
+  wazuh_integrations:
+  wazuh_active_response:
+  wazuh_agentless:
+  wazuh_wodles:
+  filebeat_etc:
+  filebeat_var:
+  wazuh-indexer-data:
+  wazuh-dashboard-config:
+  wazuh-dashboard-custom:
+  nginx-logs:
+
+services:
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.8.0
+    hostname: wazuh.manager
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 60s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        monitor: 60s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    networks:
+      - wazuh_network
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "1516:1516"
+      - "55000:55000"
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+    configs:
+      - source: wazuh_manager_conf
+        target: /var/ossec/etc/ossec.conf
+      - source: root_ca_pem
+        target: /etc/ssl/root-ca.pem
+      - source: wazuh_manager_pem
+        target: /etc/ssl/filebeat.pem
+      - source: wazuh_manager_key_pem
+        target: /etc/ssl/filebeat.key
+    secrets:
+      - source: api_password
+        target: /var/ossec/api/configuration/auth/user
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=admin
+      - FILEBEAT_SSL_VERIFICATION_MODE=full
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://localhost:55000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.8.0
+    hostname: wazuh.indexer
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.5'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 60s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        monitor: 60s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    networks:
+      - wazuh_network
+    ports:
+      - "9200:9200"
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+    configs:
+      - source: wazuh_indexer_yml
+        target: /usr/share/wazuh-indexer/opensearch.yml
+      - source: internal_users_yml
+        target: /usr/share/wazuh-indexer/internal_users.yml
+      - source: wazuh_indexer_pem
+        target: /usr/share/wazuh-indexer/certs/wazuh.indexer.pem
+      - source: wazuh_indexer_key_pem
+        target: /usr/share/wazuh-indexer/certs/wazuh.indexer.key
+      - source: root_ca_pem
+        target: /usr/share/wazuh-indexer/certs/root-ca.pem
+      - source: admin_pem
+        target: /usr/share/wazuh-indexer/certs/admin.pem
+      - source: admin_key_pem
+        target: /usr/share/wazuh-indexer/certs/admin.key
+    secrets:
+      - source: indexer_password
+        target: /usr/share/wazuh-indexer/internal_users.yml
+    environment:
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:9200/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.8.0
+    hostname: wazuh.dashboard
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 60s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        monitor: 60s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    networks:
+      - wazuh_network
+    ports:
+      - "5601:5601"
+    volumes:
+      - wazuh-dashboard-config:/usr/share/wazuh-dashboard/config
+      - wazuh-dashboard-custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    configs:
+      - source: opensearch_dashboards_yml
+        target: /usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+      - source: wazuh_dashboard_yml
+        target: /usr/share/wazuh-dashboard/config/wazuh.yml
+      - source: wazuh_dashboard_pem
+        target: /usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem
+      - source: wazuh_dashboard_key_pem
+        target: /usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem
+      - source: root_ca_pem
+        target: /usr/share/wazuh-dashboard/certs/root-ca.pem
+    secrets:
+      - source: dashboard_password
+        target: /usr/share/wazuh-dashboard/config/wazuh.yml
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=admin
+      - DASHBOARD_USERNAME=kibanaserver
+      - WAZUH_API_URL=https://wazuh.manager
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://localhost:5601/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  nginx:
+    image: nginx:1.25
+    hostname: nginx
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 60s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        monitor: 60s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    networks:
+      - wazuh_network
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - nginx-logs:/var/log/nginx
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/nginx.conf
+      - source: wazuh_dashboard_pem
+        target: /etc/ssl/certs/wazuh-dashboard.pem
+      - source: wazuh_dashboard_key_pem
+        target: /etc/ssl/certs/wazuh-dashboard-key.pem
+    depends_on:
+      - wazuh-manager
+      - wazuh-indexer
+      - wazuh-dashboard
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'

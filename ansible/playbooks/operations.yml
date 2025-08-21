@@ -1,0 +1,229 @@
+---
+# Operations playbook for managing Wazuh Docker Swarm
+- name: Wazuh Stack Operations
+  hosts: ec2_instances
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../vault.yml
+
+  vars_prompt:
+    - name: operation
+      prompt: "Select operation: [status|restart|update|scale|backup|logs]"
+      private: no
+      default: "status"
+
+  tasks:
+    - name: Display stack status
+      block:
+        - name: Get stack information
+          docker_stack_info:
+            name: "{{ stack_name }}"
+          register: stack_info
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Get service details
+          docker_service_info:
+            name: "{{ stack_name }}_{{ item }}"
+          register: service_status
+          loop:
+            - "wazuh-manager"
+            - "wazuh-indexer"
+            - "wazuh-dashboard"
+            - "nginx"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Display status information
+          debug:
+            msg: |
+              Stack: {{ stack_name }}
+              Services: {{ stack_info.results | map(attribute='name') | list }}
+              Service Status:
+              {% for result in service_status.results %}
+              - {{ result.item }}: {{ result.service.ServiceStatus.RunningTasks | default(0) }}/{{ result.service.Spec.Mode.Replicated.Replicas | default(1) }} replicas
+              {% endfor %}
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+      when: operation == "status"
+
+    - name: Restart services
+      block:
+        - name: Restart stack services
+          docker_service:
+            name: "{{ stack_name }}_{{ item }}"
+            force_update: true
+          loop:
+            - "wazuh-manager"
+            - "wazuh-indexer"
+            - "wazuh-dashboard"
+            - "nginx"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Wait for services to restart
+          pause:
+            seconds: 30
+
+        - name: Verify restart
+          docker_service_info:
+            name: "{{ stack_name }}_{{ item }}"
+          register: restart_status
+          loop:
+            - "wazuh-manager"
+            - "wazuh-indexer"
+            - "wazuh-dashboard"
+            - "nginx"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Display restart results
+          debug:
+            msg: "Service {{ item.item }} restart: {{ 'SUCCESS' if item.service.ServiceStatus.RunningTasks > 0 else 'FAILED' }}"
+          loop: "{{ restart_status.results }}"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+      when: operation == "restart"
+
+    - name: Update stack
+      block:
+        - name: Redeploy stack with updates
+          include_role:
+            name: stack_deploy
+          
+        - name: Verify update
+          include_role:
+            name: stack_verify
+      when: operation == "update"
+
+    - name: Scale services
+      vars_prompt:
+        - name: service_name
+          prompt: "Service to scale [wazuh-manager|wazuh-indexer|wazuh-dashboard|nginx]"
+          private: no
+        - name: replica_count
+          prompt: "Number of replicas"
+          private: no
+          default: "1"
+      block:
+        - name: Scale service
+          docker_service:
+            name: "{{ stack_name }}_{{ service_name }}"
+            replicas: "{{ replica_count | int }}"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Wait for scaling
+          pause:
+            seconds: 20
+
+        - name: Verify scaling
+          docker_service_info:
+            name: "{{ stack_name }}_{{ service_name }}"
+          register: scale_result
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Display scaling result
+          debug:
+            msg: |
+              Service: {{ service_name }}
+              Desired Replicas: {{ replica_count }}
+              Running Tasks: {{ scale_result.service.ServiceStatus.RunningTasks | default(0) }}
+              Status: {{ 'SUCCESS' if scale_result.service.ServiceStatus.RunningTasks == replica_count|int else 'IN PROGRESS' }}
+      when: operation == "scale"
+
+    - name: Backup data
+      block:
+        - name: Create backup directory
+          file:
+            path: "/backup/wazuh-{{ ansible_date_time.date }}"
+            state: directory
+            mode: '0755'
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Backup Wazuh volumes
+          shell: |
+            docker run --rm \
+              -v {{ item }}:/data \
+              -v /backup/wazuh-{{ ansible_date_time.date }}:/backup \
+              alpine tar czf /backup/{{ item }}-{{ ansible_date_time.date }}.tar.gz -C /data .
+          loop: "{{ docker_volumes }}"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Backup configurations
+          archive:
+            path:
+              - "{{ compose_file_path }}"
+              - "{{ ssl_certs_path }}"
+              - "{{ config_path }}"
+            dest: "/backup/wazuh-{{ ansible_date_time.date }}/configs-{{ ansible_date_time.date }}.tar.gz"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+
+        - name: Display backup location
+          debug:
+            msg: |
+              Backup completed successfully!
+              Location: /backup/wazuh-{{ ansible_date_time.date }}/
+              Contents:
+              - Volume data: {{ docker_volumes | length }} volumes backed up
+              - Configuration files: configs-{{ ansible_date_time.date }}.tar.gz
+              - SSL certificates and compose files included
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+      when: operation == "backup"
+
+    - name: View service logs
+      vars_prompt:
+        - name: service_name
+          prompt: "Service logs to view [wazuh-manager|wazuh-indexer|wazuh-dashboard|nginx|all]"
+          private: no
+          default: "all"
+        - name: log_lines
+          prompt: "Number of log lines to show"
+          private: no
+          default: "100"
+      block:
+        - name: Get logs for specific service
+          shell: "docker service logs --tail {{ log_lines }} {{ stack_name }}_{{ service_name }}"
+          register: service_logs
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+          when: service_name != "all"
+
+        - name: Get logs for all services
+          shell: "docker service logs --tail {{ log_lines }} {{ stack_name }}_{{ item }}"
+          register: all_service_logs
+          loop:
+            - "wazuh-manager"
+            - "wazuh-indexer"
+            - "wazuh-dashboard"
+            - "nginx"
+          delegate_to: "{{ primary_manager }}"
+          run_once: true
+          when: service_name == "all"
+
+        - name: Display specific service logs
+          debug:
+            msg: |
+              Logs for {{ service_name }}:
+              {{ service_logs.stdout }}
+          when: service_name != "all" and service_logs is defined
+
+        - name: Display all service logs
+          debug:
+            msg: |
+              Logs for {{ item.item }}:
+              {{ item.stdout }}
+          loop: "{{ all_service_logs.results }}"
+          when: service_name == "all" and all_service_logs is defined
+      when: operation == "logs"
+
+    - name: Invalid operation
+      debug:
+        msg: "Invalid operation '{{ operation }}'. Valid options: status, restart, update, scale, backup, logs"
+      when: operation not in ["status", "restart", "update", "scale", "backup", "logs"]

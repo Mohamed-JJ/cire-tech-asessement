@@ -1,0 +1,85 @@
+# Production environment specific variables
+---
+# Swarm Manager Configuration
+swarm_manager_groups:
+  - ec2_instances
+
+# Node Configuration
+primary_manager: "host1"  # First host will be the primary manager
+worker_nodes:
+  - "host2"
+  - "host3"
+
+# Production specific overrides
+wazuh_services:
+  manager:
+    replicas: 1
+    placement_constraints:
+      - "node.hostname == host1"
+  indexer:
+    replicas: 1
+    placement_constraints:
+      - "node.hostname == host1"
+  dashboard:
+    replicas: 1
+    placement_constraints:
+      - "node.hostname == host1"
+  nginx:
+    replicas: 1
+    placement_constraints:
+      - "node.hostname == host1"
+
+# Resource Limits for Production
+resource_limits:
+  manager:
+    memory: "2G"
+    cpus: "1.0"
+  indexer:
+    memory: "4G"
+    cpus: "2.0"
+  dashboard:
+    memory: "1G"
+    cpus: "0.5"
+  nginx:
+    memory: "512M"
+    cpus: "0.5"
+
+resource_reservations:
+  manager:
+    memory: "1G"
+    cpus: "0.5"
+  indexer:
+    memory: "2G"
+    cpus: "1.0"
+  dashboard:
+    memory: "512M"
+    cpus: "0.25"
+  nginx:
+    memory: "128M"
+    cpus: "0.1"
+
+# Environment specific ports
+wazuh_ports:
+  manager:
+    - "1514:1514"
+    - "1515:1515"
+    - "514:514/udp"
+    - "55000:55000"
+  indexer:
+    - "9200:9200"
+  dashboard:
+    - "443:5601"
+  nginx:
+    - "80:80"
+    - "8443:443"
+
+# Logging Configuration
+logging_driver: "json-file"
+logging_options:
+  max-size: "10m"
+  max-file: "3"
+
+# Backup Configuration
+backup_enabled: true
+backup_schedule: "0 2 * * *"  # Daily at 2 AM
+backup_retention_days: 7

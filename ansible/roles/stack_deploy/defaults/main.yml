@@ -1,0 +1,141 @@
+---
+# Stack deployment defaults
+
+# Docker stack configuration
+stack_name: "wazuh"
+compose_file_path: "/opt/wazuh-stack"
+compose_file_name: "docker-compose.swarm.yml"
+
+# Deployment settings
+rollback_enabled: true
+wait_for_services: true
+service_check_retries: 30
+service_check_delay: 10
+
+# Primary manager configuration
+primary_manager: "{{ groups['managers'][0] if 'managers' in groups else inventory_hostname }}"
+
+# Services to wait for
+stack_services:
+  - "wazuh-manager"
+  - "wazuh-indexer"
+  - "wazuh-dashboard"
+  - "nginx"
+
+# Wazuh Services Configuration
+wazuh_services:
+  manager:
+    image: "wazuh/wazuh-manager:4.8.0"
+    replicas: 1
+    placement_constraints: []
+  indexer:
+    image: "wazuh/wazuh-indexer:4.8.0"
+    replicas: 1
+    placement_constraints: []
+  dashboard:
+    image: "wazuh/wazuh-dashboard:4.8.0"
+    replicas: 1
+    placement_constraints: []
+  nginx:
+    image: "nginx:1.25"
+    replicas: 1
+    placement_constraints: []
+
+# Port mappings
+wazuh_ports:
+  manager:
+    - "1514:1514"
+    - "1515:1515"
+    - "1516:1516"
+    - "55000:55000"
+  indexer:
+    - "9200:9200"
+  dashboard:
+    - "5601:5601"
+  nginx:
+    - "80:80"
+    - "443:443"
+
+# Resource limits
+resource_limits:
+  manager:
+    memory: "1G"
+    cpus: "1.0"
+  indexer:
+    memory: "2G"
+    cpus: "1.5"
+  dashboard:
+    memory: "1G"
+    cpus: "1.0"
+  nginx:
+    memory: "512M"
+    cpus: "0.5"
+
+resource_reservations:
+  manager:
+    memory: "512M"
+    cpus: "0.5"
+  indexer:
+    memory: "1G"
+    cpus: "1.0"
+  dashboard:
+    memory: "512M"
+    cpus: "0.5"
+  nginx:
+    memory: "128M"
+    cpus: "0.1"
+
+# Update configuration
+update_parallelism: 1
+update_delay: 10s
+update_failure_action: "rollback"
+update_monitor: 60s
+rollback_max_failure_ratio: 0.3
+
+# Rollback configuration
+rollback_parallelism: 1
+rollback_delay: 10s
+rollback_failure_action: "pause"
+rollback_monitor: 60s
+
+# Health check configuration
+health_check_interval: 30s
+health_check_timeout: 10s
+health_check_retries: 3
+health_check_start_period: 60s
+
+# Logging configuration
+logging_driver: "json-file"
+logging_options:
+  max-size: "10m"
+  max-file: "5"
+
+# Environment variables
+INDEXER_URL: "https://wazuh.indexer:9200"
+INDEXER_USERNAME: "admin"
+FILEBEAT_SSL_VERIFICATION_MODE: "full"
+SSL_CERTIFICATE_AUTHORITIES: "/etc/ssl/root-ca.pem"
+SSL_CERTIFICATE: "/etc/ssl/filebeat.pem"
+SSL_KEY: "/etc/ssl/filebeat.key"
+API_USERNAME: "wazuh-wui"
+WAZUH_API_URL: "https://wazuh.manager"
+DASHBOARD_USERNAME: "kibanaserver"
+OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+
+# Docker volumes
+docker_volumes:
+  - "wazuh_api_configuration"
+  - "wazuh_etc"
+  - "wazuh_logs"
+  - "wazuh_queue"
+  - "wazuh_var_multigroups"
+  - "wazuh_integrations"
+  - "wazuh_active_response"
+  - "wazuh_agentless"
+  - "wazuh_wodles"
+  - "filebeat_etc"
+  - "filebeat_var"
+  - "wazuh-indexer-data"
+  - "wazuh-dashboard-config"
+  - "wazuh-dashboard-custom"
+  - "nginx-logs"
