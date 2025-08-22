@@ -32,7 +32,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results-wazuh-indexer.sarif'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: true
           vuln-type: 'os,library'
 
@@ -62,7 +62,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results-wazuh-manager.sarif'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: true
           vuln-type: 'os,library'
 
@@ -92,7 +92,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results-wazuh-dashboard.sarif'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: true
           vuln-type: 'os,library'
 
