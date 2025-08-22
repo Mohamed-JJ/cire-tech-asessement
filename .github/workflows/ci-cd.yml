@@ -10,7 +10,7 @@ jobs:
   deploy-and-test:
     name: Deploy Stack and Run Tests
     runs-on: ubuntu-latest
-    needs: lint-ansible
+    # needs: lint-ansible
     
     services:
       # Docker-in-Docker for testing Docker Swarm
