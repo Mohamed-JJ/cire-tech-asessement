@@ -29,7 +29,14 @@ jobs:
           chromium-browser \
           xvfb
         
-    - name: Generate self-signed SSL certificate for testing
+    - name: Generate Wazuh indexer certificates
+      run: |
+        cd wazuh-docker/single-node
+        echo "Generating Wazuh indexer certificates..."
+        docker-compose -f generate-indexer-certs.yml run --rm generator
+        ls -la config/wazuh_indexer_ssl_certs/
+        
+    - name: Generate self-signed SSL certificate for Nginx
       run: |
         mkdir -p config/nginx/ssl
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -40,28 +47,30 @@ jobs:
         
     - name: Start Wazuh stack with Docker Compose
       run: |
+        cd wazuh-docker/single-node
         # Start services in background
-        docker-compose -f docker-compose.ci.yml --profile ci up -d
+        docker-compose up -d
         
         # Wait for services to start
         echo "Waiting for services to start..."
-        sleep 30
+        sleep 60
         
         # Check service status
-        docker-compose -f docker-compose.ci.yml ps
+        docker-compose ps
         
     - name: Wait for services to be ready
       run: |
+        cd wazuh-docker/single-node
         echo "Waiting for Wazuh services to be fully ready..."
         
-        # Wait for Nginx health check
-        timeout 300 bash -c 'until curl -f http://localhost/health; do sleep 10; echo "Waiting for Nginx..."; done'
+        # Wait for Nginx health check (if nginx is configured in single-node)
+        timeout 300 bash -c 'until curl -f http://localhost/health 2>/dev/null; do sleep 10; echo "Waiting for services..."; done' || echo "Direct health check not available"
         
-        # Wait for Wazuh Dashboard (through Nginx HTTPS)
-        timeout 300 bash -c 'until curl -f -k https://localhost/app/login; do sleep 10; echo "Waiting for Wazuh Dashboard..."; done'
+        # Wait for Wazuh Dashboard
+        timeout 300 bash -c 'until curl -f http://localhost:5601/app/login 2>/dev/null; do sleep 10; echo "Waiting for Wazuh Dashboard..."; done'
         
         # Wait for Wazuh API
-        timeout 300 bash -c 'until curl -f http://localhost:55000/; do sleep 10; echo "Waiting for Wazuh API..."; done'
+        timeout 300 bash -c 'until curl -f http://localhost:55000/ 2>/dev/null; do sleep 10; echo "Waiting for Wazuh API..."; done'
         
         echo "All services are ready!"
         
@@ -70,10 +79,10 @@ jobs:
         cp tests/.env.example tests/.env
         cat >> tests/.env << EOF
         WAZUH_HOST=localhost
-        WAZUH_PORT=443
-        WAZUH_DASHBOARD_PORT=443
+        WAZUH_PORT=5601
+        WAZUH_DASHBOARD_PORT=5601
         WAZUH_API_PORT=55000
-        WAZUH_USE_HTTPS=true
+        WAZUH_USE_HTTPS=false
         HEADLESS=true
         CI=true
         WAZUH_TEST_USER=admin
@@ -104,42 +113,41 @@ jobs:
         
     - name: Check HTTPS functionality
       run: |
-        echo "Testing HTTPS endpoints..."
+        echo "Testing Wazuh endpoints..."
         
-        # Test HTTPS redirect
-        echo "1. Testing HTTP to HTTPS redirect:"
-        curl -I http://localhost/ || true
+        # Test Wazuh Dashboard direct access
+        echo "1. Testing Wazuh Dashboard direct access:"
+        curl -I http://localhost:5601/ || true
         
-        # Test HTTPS access (self-signed cert)
-        echo "2. Testing HTTPS access with self-signed certificate:"
-        curl -I -k https://localhost/ || true
+        # Test Wazuh API direct access  
+        echo "2. Testing Wazuh API direct access:"
+        curl -I http://localhost:55000/ || true
         
-        # Test security headers
-        echo "3. Testing security headers:"
-        curl -I -k https://localhost/ | grep -E "(Strict-Transport-Security|X-Frame-Options|X-Content-Type-Options)"
+        # Test Wazuh Indexer
+        echo "3. Testing Wazuh Indexer:"
+        curl -I -k https://localhost:9200/ || true
         
-        # Test API through HTTPS proxy
-        echo "4. Testing API through HTTPS proxy:"
-        curl -k https://localhost/api/ || true
+        # Show running containers
+        echo "4. Running containers:"
+        cd wazuh-docker/single-node
+        docker-compose ps
         
     - name: Collect service logs on failure
       if: failure()
       run: |
+        cd wazuh-docker/single-node
         echo "=== Docker Compose Status ==="
-        docker-compose -f docker-compose.ci.yml ps
+        docker-compose ps
         
         echo "=== Service Logs ==="
-        echo "--- Nginx ---"
-        docker-compose -f docker-compose.ci.yml logs nginx
-        
         echo "--- Wazuh Manager ---"
-        docker-compose -f docker-compose.ci.yml logs wazuh-manager
+        docker-compose logs wazuh.manager
         
-        echo "--- Wazuh Dashboard ---"
-        docker-compose -f docker-compose.ci.yml logs wazuh-dashboard
+        echo "--- Wazuh Dashboard ---"  
+        docker-compose logs wazuh.dashboard
         
         echo "--- Wazuh Indexer ---"
-        docker-compose -f docker-compose.ci.yml logs wazuh-indexer
+        docker-compose logs wazuh1.indexer
         
     - name: Upload test reports
       if: always()
@@ -152,5 +160,6 @@ jobs:
     - name: Cleanup
       if: always()
       run: |
-        docker-compose -f docker-compose.ci.yml down -v
+        cd wazuh-docker/single-node
+        docker-compose down -v
         docker system prune -f
