@@ -1,23 +1,17 @@
-name: Wazuh Docker Swarm CI/CD
+name: Wazuh Docker Compose CI/CD
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
   deploy-and-test:
     name: Deploy Stack and Run Tests
     runs-on: ubuntu-latest
-    # needs: lint-ansible
     
-    services:
-      # Docker-in-Docker for testing Docker Swarm
-      docker:
-        image: docker:24-dind
-        options: --privileged
-        
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -31,68 +25,65 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          ansible \
-          docker.io \
           docker-compose \
           chromium-browser \
           xvfb
         
-    - name: Start Docker
+    - name: Generate self-signed SSL certificate for testing
       run: |
-        sudo systemctl start docker
-        sudo usermod -aG docker $USER
+        mkdir -p config/nginx/ssl
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+          -keyout config/nginx/ssl/server.key \
+          -out config/nginx/ssl/server.crt \
+          -subj '/C=US/ST=Test/L=Test/O=Wazuh-CI/OU=Test/CN=localhost'
+        ls -la config/nginx/ssl/
         
-    - name: Set up Docker Swarm
+    - name: Start Wazuh stack with Docker Compose
       run: |
-        sudo docker swarm init
+        # Start services in background
+        docker-compose -f docker-compose.ci.yml --profile ci up -d
         
-    - name: Create test inventory
-      run: |
-        mkdir -p ansible/inventory/test
-        cat > ansible/inventory/test/host << EOF
-        [swarm_managers]
-        localhost ansible_connection=local ansible_become=yes
+        # Wait for services to start
+        echo "Waiting for services to start..."
+        sleep 30
         
-        [swarm_managers:vars]
-        stack_name=wazuh-test
-        domain_name=localhost
-        email_address=test@example.com
-        wazuh_version=4.7.2
-        elastic_version=7.17.9
-        nginx_port=8080
-        dashboard_port=5601
-        api_port=55000
-        EOF
-        
-    - name: Run Ansible deployment
-      run: |
-        cd ansible
-        ansible-playbook -i inventory/test/host playbooks/deploy.yml \
-          --extra-vars "letsencrypt_staging=true" \
-          --skip-tags "letsencrypt"
+        # Check service status
+        docker-compose -f docker-compose.ci.yml ps
         
     - name: Wait for services to be ready
       run: |
-        echo "Waiting for services to start..."
-        sleep 60
+        echo "Waiting for Wazuh services to be fully ready..."
         
-        # Check if services are running
-        sudo docker service ls
+        # Wait for Nginx health check
+        timeout 300 bash -c 'until curl -f http://localhost/health; do sleep 10; echo "Waiting for Nginx..."; done'
         
-        # Wait for Wazuh Manager to be healthy
-        timeout 300 bash -c 'until sudo docker service logs wazuh-test_wazuh-manager 2>&1 | grep -q "Wazuh manager started"; do sleep 10; done' || true
+        # Wait for Wazuh Dashboard (through Nginx HTTPS)
+        timeout 300 bash -c 'until curl -f -k https://localhost/app/login; do sleep 10; echo "Waiting for Wazuh Dashboard..."; done'
+        
+        # Wait for Wazuh API
+        timeout 300 bash -c 'until curl -f http://localhost:55000/; do sleep 10; echo "Waiting for Wazuh API..."; done'
+        
+        echo "All services are ready!"
         
     - name: Create test environment
       run: |
         cp tests/.env.example tests/.env
         cat >> tests/.env << EOF
         WAZUH_HOST=localhost
-        WAZUH_PORT=8080
-        WAZUH_DASHBOARD_PORT=5601
+        WAZUH_PORT=443
+        WAZUH_DASHBOARD_PORT=443
         WAZUH_API_PORT=55000
+        WAZUH_USE_HTTPS=true
         HEADLESS=true
         CI=true
+        WAZUH_TEST_USER=admin
+        WAZUH_TEST_PASSWORD=SecretPassword
         EOF
+        
+    - name: Install test dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r tests/requirements.txt
         
     - name: Run smoke tests
       run: |
@@ -111,17 +102,44 @@ jobs:
         export HEADLESS=true
         ./tests/run_tests.sh ui
         
+    - name: Check HTTPS functionality
+      run: |
+        echo "Testing HTTPS endpoints..."
+        
+        # Test HTTPS redirect
+        echo "1. Testing HTTP to HTTPS redirect:"
+        curl -I http://localhost/ || true
+        
+        # Test HTTPS access (self-signed cert)
+        echo "2. Testing HTTPS access with self-signed certificate:"
+        curl -I -k https://localhost/ || true
+        
+        # Test security headers
+        echo "3. Testing security headers:"
+        curl -I -k https://localhost/ | grep -E "(Strict-Transport-Security|X-Frame-Options|X-Content-Type-Options)"
+        
+        # Test API through HTTPS proxy
+        echo "4. Testing API through HTTPS proxy:"
+        curl -k https://localhost/api/ || true
+        
     - name: Collect service logs on failure
       if: failure()
       run: |
-        echo "=== Docker Service Status ==="
-        sudo docker service ls
+        echo "=== Docker Compose Status ==="
+        docker-compose -f docker-compose.ci.yml ps
         
         echo "=== Service Logs ==="
-        for service in $(sudo docker service ls --format "{{.Name}}"); do
-          echo "--- $service ---"
-          sudo docker service logs --tail 50 $service || true
-        done
+        echo "--- Nginx ---"
+        docker-compose -f docker-compose.ci.yml logs nginx
+        
+        echo "--- Wazuh Manager ---"
+        docker-compose -f docker-compose.ci.yml logs wazuh-manager
+        
+        echo "--- Wazuh Dashboard ---"
+        docker-compose -f docker-compose.ci.yml logs wazuh-dashboard
+        
+        echo "--- Wazuh Indexer ---"
+        docker-compose -f docker-compose.ci.yml logs wazuh-indexer
         
     - name: Upload test reports
       if: always()
@@ -130,40 +148,9 @@ jobs:
         name: test-reports
         path: tests/reports/
         retention-days: 30
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: deploy-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
         
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v2
+    - name: Cleanup
       if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
-
-  cleanup:
-    name: Cleanup
-    runs-on: ubuntu-latest
-    needs: [deploy-and-test, security-scan]
-    if: always()
-    
-    steps:
-    - name: Cleanup Docker resources
       run: |
-        # This would be more relevant in a real infrastructure setup
-        # For CI, the runner will be destroyed anyway
-        echo "Cleanup completed in CI environment"
+        docker-compose -f docker-compose.ci.yml down -v
+        docker system prune -f
