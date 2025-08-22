@@ -7,36 +7,6 @@ on:
     branches: [ main ]
 
 jobs:
-  # lint-ansible:
-  #   name: Lint Ansible Playbooks
-  #   runs-on: ubuntu-latest
-    
-  #   steps:
-  #   - name: Checkout code
-  #     uses: actions/checkout@v4
-      
-  #   - name: Set up Python
-  #     uses: actions/setup-python@v4
-  #     with:
-  #       python-version: '3.11'
-        
-  #   - name: Install dependencies
-  #     run: |
-  #       python -m pip install --upgrade pip
-  #       pip install ansible ansible-lint yamllint
-        
-  #   - name: Lint YAML files
-  #     run: |
-  #       yamllint ansible/
-        
-  #   - name: Lint Ansible playbooks
-  #     run: |
-  #       ansible-lint ansible/playbooks/ || true
-        
-  #   - name: Validate inventory
-  #     run: |
-  #       ansible-inventory -i ansible/inventory/prod/host --list
-
   deploy-and-test:
     name: Deploy Stack and Run Tests
     runs-on: ubuntu-latest
