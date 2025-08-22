@@ -1,0 +1,47 @@
+name: Simple Test Workflow
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  test:
+    name: Simple Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run basic test
+      run: |
+        echo "🎉 GitHub Actions is working!"
+        echo "Current directory: $(pwd)"
+        echo "Files in repo:"
+        ls -la
+        
+    - name: Check Python
+      run: |
+        python3 --version
+        echo "Python is available"
+        
+    - name: Check if ansible directory exists
+      run: |
+        if [ -d "ansible" ]; then
+          echo "✅ Ansible directory found"
+          ls -la ansible/
+        else
+          echo "❌ Ansible directory not found"
+        fi
+        
+    - name: Check if tests directory exists
+      run: |
+        if [ -d "tests" ]; then
+          echo "✅ Tests directory found"
+          ls -la tests/
+        else
+          echo "❌ Tests directory not found"
+        fi
