@@ -1,0 +1,9 @@
+# Testing dependencies
+selenium==4.15.2
+webdriver-manager==4.0.1
+pytest==7.4.3
+pytest-html==4.1.1
+pytest-xvfb==3.0.0
+requests==2.31.0
+python-dotenv==1.0.0
+jsonschema==4.20.0
