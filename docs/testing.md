@@ -445,121 +445,6 @@ Create custom report templates in `tests/templates/`:
 </html>
 ```
 
-## 🚨 Troubleshooting Tests
-
-### Common Test Issues
-
-#### 1. Service Connectivity Issues
-
-**Symptoms**:
-```
-ConnectionError: Failed to establish connection to localhost:5601
-```
-
-**Solutions**:
-```bash
-# Check service status
-docker-compose ps
-
-# Verify service logs
-docker-compose logs wazuh.dashboard
-
-# Check port availability
-netstat -tlnp | grep 5601
-
-# Wait for services to be ready
-./tests/run_tests.sh --wait-for-services
-```
-
-#### 2. Authentication Failures
-
-**Symptoms**:
-```
-401 Unauthorized: Authentication required
-```
-
-**Solutions**:
-```bash
-# Verify credentials in .env file
-cat tests/.env | grep -E "(USERNAME|PASSWORD)"
-
-# Test authentication manually
-curl -u admin:SecretPassword http://localhost:55000/
-
-# Reset default passwords
-docker-compose down && docker-compose up -d
-```
-
-#### 3. Selenium WebDriver Issues
-
-**Symptoms**:
-```
-WebDriverException: Chrome binary not found
-```
-
-**Solutions**:
-```bash
-# Install Chrome/Chromium
-sudo apt-get install chromium-browser
-
-# Update webdriver
-pip install --upgrade selenium webdriver-manager
-
-# Use Firefox alternative
-export SELENIUM_DRIVER=firefox
-```
-
-#### 4. Timeout Issues
-
-**Symptoms**:
-```
-TimeoutException: Service not ready within 30 seconds
-```
-
-**Solutions**:
-```bash
-# Increase timeout in tests/.env
-echo "TEST_TIMEOUT=60" >> tests/.env
-
-# Wait for services manually
-./tests/run_tests.sh --wait-for-ready
-
-# Check service health
-curl -f http://localhost:5601/api/status
-```
-
-### Debug Mode Testing
-
-```bash
-# Run tests with maximum verbosity
-pytest tests/ -vvv --tb=long --capture=no
-
-# Enable debug logging
-export DEBUG=true
-pytest tests/ --log-cli-level=DEBUG
-
-# Run single test with debugging
-pytest tests/test_wazuh_deployment.py::TestWazuhDeployment::test_api_health_probe -vvv -s
-```
-
-### Test Environment Reset
-
-```bash
-# Clean test environment
-docker-compose -f wazuh-docker/single-node/docker-compose.yml down -v
-docker system prune -f
-
-# Regenerate certificates
-cd wazuh-docker/single-node
-docker-compose -f generate-indexer-certs.yml run --rm generator
-
-# Restart services
-docker-compose up -d
-
-# Wait for readiness
-sleep 120
-```
-
 ## 🔄 Continuous Integration
 
 ### GitHub Actions Integration
@@ -609,8 +494,6 @@ ab -n 1000 -c 10 http://localhost:55000/
 htop
 docker stats
 ```
-
-## ✅ Best Practices
 
 ### Test Writing Guidelines
 

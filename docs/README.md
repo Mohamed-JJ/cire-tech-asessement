@@ -216,30 +216,3 @@ docker-compose -f generate-indexer-certs.yml run --rm generator
 2. **Create Branch**: Feature or bug-fix branches
 3. **Submit PR**: Pull request with detailed description
 4. **Follow Guidelines**: Code style and testing requirements
-
-## 🗺️ Roadmap
-
-### Current Release (v1.0)
-- ✅ Single-node deployment
-- ✅ Multi-node clustering
-- ✅ SSL/TLS security
-- ✅ CI/CD automation
-- ✅ Comprehensive documentation
-
-### Upcoming Features (v1.1)
-- 🔄 Advanced monitoring dashboards
-- 🔄 Enhanced security scanning
-- 🔄 Performance optimization
-- 🔄 Additional integrations
-
-### Future Enhancements (v2.0)
-- 📋 Kubernetes deployment
-- 📋 Cloud provider integration  
-- 📋 Advanced analytics
-- 📋 Machine learning integration
-
----
-
-**Next Steps**: Choose your path above based on your role and objectives. Each guide provides detailed, step-by-step instructions with real-world examples and best practices.
-
-*Last updated: $(date '+%Y-%m-%d')*
